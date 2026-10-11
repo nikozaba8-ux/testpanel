@@ -1,0 +1,147 @@
+#!/bin/bash
+
+# ==================== KOLORY I ASCII ====================
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+CYAN='\033[0;36m'
+YELLOW='\033[0;33m'
+NC='\033[0m'
+
+ascii_art="
+       _ _     _                 
+      | (_)   | |                
+      | |_ ___| |__  _ __  _   _ 
+  _   | | / __| '_ \| '_ \| | | |
+ | |__| | \__ \ | | | | | | |_| |
+  \____/|_|___/_| |_|_| |_|\__,_|
+"
+
+clear
+
+if [ "$EUID" -ne 0 ]; then
+  echo -e "${RED}Uruchom skrypt jako root (sudo).${NC}"
+  exit 1
+fi
+
+echo -e "${CYAN}$ascii_art${NC}"
+echo -e "${GREEN}* Instalacja Skyport Panel + Daemon (bez zewnętrznej bazy)${NC}"
+echo ""
+
+# ==================== 1. ZALEŻNOŚCI ====================
+echo -e "${YELLOW}[1/6] Instalowanie zależności...${NC}"
+
+apt update
+apt install -y curl software-properties-common git
+
+# Node.js 20
+curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+apt-get install -y nodejs
+
+# Docker (wymagany do tworzenia serwerów)
+curl -sSL https://get.docker.com/ | CHANNEL=stable bash
+systemctl enable --now docker
+
+echo -e "${GREEN}✓ Zależności zainstalowane${NC}"
+
+# ==================== 2. PANEL ====================
+echo -e "${YELLOW}[2/6] Instalowanie Panelu...${NC}"
+
+mkdir -p /opt/skyport
+cd /opt/skyport
+
+git clone https://github.com/achul123/panel5.git panel
+cd panel
+npm install
+
+# Config z SQLite (plik, nie serwer bazy)
+cat > config.json << 'EOF'
+{
+  "baseUri": "http://localhost:3001",
+  "port": 3001,
+  "session_secret": "ZmienToNaCosLosowego123!",
+  "domain": "localhost",
+  "mode": "production",
+  "version": "0.3.0",
+  "databaseURL": "sqlite://skyport.db",
+  "databaseTable": "skyport",
+  "ogTitle": "Skyport Panel",
+  "ogDescription": "Skyport Panel"
+}
+EOF
+
+npm run seed
+npm run createUser
+
+echo -e "${GREEN}✓ Panel zainstalowany${NC}"
+
+# ==================== 3. DAEMON (skyportd) ====================
+echo -e "${YELLOW}[3/6] Instalowanie Daemon (skyportd)...${NC}"
+
+cd /opt/skyport
+git clone https://github.com/skyport-team/skyportd.git daemon
+cd daemon
+npm install
+
+# Podstawowy config daemon
+cat > config.json << 'EOF'
+{
+  "remote": "http://localhost:3001",
+  "key": "change-me",
+  "port": 8002,
+  "version": "0.3.0",
+  "ftp": {
+    "ip": "0.0.0.0",
+    "port": 8003
+  }
+}
+EOF
+
+echo -e "${GREEN}✓ Daemon zainstalowany${NC}"
+
+# ==================== 4. PM2 ====================
+echo -e "${YELLOW}[4/6] Uruchamianie przez PM2...${NC}"
+
+npm install -g pm2
+
+# Panel
+cd /opt/skyport/panel
+pm2 start index.js --name "skyport-panel"
+
+# Daemon
+cd /opt/skyport/daemon
+pm2 start index.js --name "skyport-daemon"
+
+pm2 save
+pm2 startup
+
+echo -e "${GREEN}✓ Oba procesy uruchomione${NC}"
+
+# ==================== 5. INSTRUKCJA ====================
+clear
+echo -e "${CYAN}$ascii_art${NC}"
+echo -e "${GREEN}==============================================${NC}"
+echo -e "${GREEN}  Skyport zainstalowany pomyślnie!${NC}"
+echo -e "${GREEN}==============================================${NC}"
+echo ""
+echo -e "Panel:     ${CYAN}http://TWOJE_IP:3001${NC}"
+echo -e "Baza:      ${YELLOW}SQLite (plik skyport.db) – zero zewnętrznej bazy${NC}"
+echo ""
+echo -e "${YELLOW}Aby móc tworzyć serwery zrób to:${NC}"
+echo ""
+echo "1. Wejdź na panel → zaloguj się (użytkownik utworzony w createUser)"
+echo "2. Idź do Nodes → Create Node"
+echo "3. Ustaw nazwę np. \"Node-1\", IP serwera, port 8002"
+echo "4. Po utworzeniu node'a kliknij \"Configure\" i skopiuj klucz"
+echo "5. Wklej klucz do /opt/skyport/daemon/config.json (pole \"key\")"
+echo "6. Zrestartuj daemon:"
+echo -e "   ${CYAN}pm2 restart skyport-daemon${NC}"
+echo ""
+echo "7. Teraz możesz tworzyć serwery (Servers → Create Server)"
+echo ""
+echo -e "${GREEN}Przydatne komendy:${NC}"
+echo "  pm2 status"
+echo "  pm2 logs skyport-panel"
+echo "  pm2 logs skyport-daemon"
+echo "  pm2 restart all"
+echo ""
+echo -e "${YELLOW}* Made by Jishnu (zmodyfikowane – SQLite + Daemon)${NC}"
